@@ -1,0 +1,42 @@
+{
+  "robotId": "",
+  "configs" : {
+    "minimalBuyingOrderAbs": 0.5,
+    "maximalBuyingOrderRel": 0.01,
+    "timeUntilNextBuy": 30,
+    "buyingFee" : 0.001,
+    "sellingFee" : 0.001,
+    "targetProfit": 0.004,
+    "bandQuantity": 5
+  },
+  "results": {
+    "profits": 0,
+    "losses": 0,
+    "fees": 0
+  },
+  "assets":{
+    "USDT": {
+      "balance" : 50,
+      "avgPrice" : 1,
+      "values" : [
+        {
+          "vl": 1,
+          "qt": 0
+        }
+      ]
+    },
+    "ADA": {
+      "balance" : 0,
+      "avgPrice" : 0,
+      "dumpPoint": 0,
+      "sellingPoint": 0,
+      "buyingPoint": 0,
+      "values" : []
+    }
+  },
+  "orders": {
+    "buy" : [],
+    "sell" : []
+  },
+  "transactions" : []
+}
