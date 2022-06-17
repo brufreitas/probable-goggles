@@ -78,11 +78,26 @@ class BandControl {
   }
 
   getPreviousBand(band) {
-    return this.findBandByBandNumber(band.bandNumber - 1)
+    let found = null
+    while (true) {
+      found = this.findBandByBandNumber(band.bandNumber - 1)
+      if (typeof found != 'undefined') {
+        return found
+      }
+      this.addLowerBand()
+    }
   }
 
   getNextBand(band) {
-    return this.findBandByBandNumber(band.bandNumber + 1)
+
+    let found = null
+    while (true) {
+      found = this.findBandByBandNumber(band.bandNumber + 1)
+      if (typeof found != 'undefined') {
+        return found
+      }
+      this.addHigherBand()
+    }
   }
 
   addHigherBand() {
@@ -429,12 +444,10 @@ class OperationBand {
     const i = this.assets.findIndex(item => item.id == transaction.buyId)
     const buyTransaction = this.assets[i]
 
-    // console.log(buyTransaction)
-
     this.assets.splice(i, 1); // 2nd parameter means remove one item only
     this.assets.sort((a, b) => a.price - b.price);
 
-    profit = transaction.value - transaction.fee - buyTransaction.value
+    let profit = transaction.value - transaction.fee - buyTransaction.value
     if (profit > 0) {
       this.results.profits += profit
     } else {
@@ -472,8 +485,8 @@ class Transaction {
     this.id        = blockId + '-' + generateUID()
     this.side      = side
     this.symbol    = symbol
-    this.value     = value           //balance spent / balance received
-    this.size      = value / price   //counterBalance received / counterBalance spent
+    this.value     = value           //buy: balance spent           / sell: balance received
+    this.size      = value / price   //buy: counterBalance received / sell: counterBalance spent
     this.price     = price
     this.fee       = value * rbData.configs.buyingFee
     this.timestamp = Date.now()
@@ -482,8 +495,12 @@ class Transaction {
 
 class BuyTransaction extends Transaction {
 
-  constructor(blockId, symbol, side, price, value) {
-    super(blockId, symbol, side, price, value)
+  constructor(blockId, symbol, price, value) {
+    super(blockId, symbol, 'buy', price, value)
+  }
+
+  toString() {
+    return this.id + '/ ' + price + ' / ' + value
   }
 
 }
@@ -491,8 +508,10 @@ class BuyTransaction extends Transaction {
 class SellTransaction extends Transaction {
   buyId
 
-  constructor(blockId, symbol, side, price, value, buyId) {
-    super(blockId, symbol, side, price, value)
+  constructor(blockId, symbol, price, counterValue, buyId) {
+    let value = counterValue * price
+
+    super(blockId, symbol, 'sell', price, value)
 
     this.buyId = buyId
   }
@@ -500,31 +519,58 @@ class SellTransaction extends Transaction {
 
 class TransactionBlock {
   id
-  transactions
   startedAt
   endedAt
+  transactions
 
-  contructor (id) {
+  constructor (id) {
+    logAdd(`TransactionBlock constructor: ${id}`)
+
     this.id               = id
-    this.transactions     = []
     this.startedAt        = Date.now()
     this.endedAt          = null
+    this.transactions     = []
   }
 
-  addTrasaction(transaction) {
-    return this.transactions.push(transaction)
+  addTransaction(transaction) {
+    let ret = this.transactions.push(transaction)
+
+    this.saveData()
+
+    return ret
   }
 
   saveData () {
-
-    let transactionBlockFileName = replaceFileNameTemplate(transactionBlockFileNameTemplate)
-    transactionBlockFileName = transactionBlockFileName.replace('{blockId}', this.id)
-
-    fs.writeFileSync(transactionBlockFileName, JSON.stringify(this, null, 2));
+    fs.writeFileSync(this.fileName, JSON.stringify(this));
   }
 
   loadData () {
+    logAdd(`TransactionBlock loadData this.id: (${this.id}), fileName: (${this.fileName})`)
 
+    let obj = JSON.parse(fs.readFileSync(this.fileName));
+
+    for (var [key, value] of Object.entries(obj)) {
+      this[key] = value
+    }
+
+    Object.setPrototypeOf(this, TransactionBlock.prototype)
+
+    this.transactions.forEach((item, i) => {
+      if (item.side == 'buy') {
+        Object.setPrototypeOf(item, BuyTransaction.prototype)
+      } else {
+        Object.setPrototypeOf(item, SellTransaction.prototype)
+      }
+    })
+
+    logAdd(`TransactionBlock loadData data loaded this.id: (${this.id})`)
+  }
+
+  get fileName() {
+    let fileName = replaceFileNameTemplate(txnBlockFileNameTemplate)
+    fileName = fileName.replace('{blockId}', this.id)
+
+    return fileName
   }
 
   get transactionCount() {
@@ -534,68 +580,178 @@ class TransactionBlock {
 
 class TransactionControl {
   transactionCount
-  currentBlock
-  blocks
+
+  currentBlockIdx
+
+  transactionsPerBlock = 10
+
+  blocks = []
+  loadedBlocks = []
 
   constructor() {
+    logAdd(`TransactionControl constructor`)
+
+    if (fs.existsSync(this.fileName)) {
+      logAdd(`TransactionControl constructor going to loadData from [${this.fileName}]`)
+      this.loadData()
+      logAdd(`TransactionControl constructor data loaded from [${this.fileName}]`)
+      return
+    }
+
+    logAdd(`TransactionControl constructor will create the TransactionControl object`)
+
     this.transactionCount = 0
     this.blocks = []
 
     this.createNewBlock()
+
+    this.saveData()
+  }
+
+  get fileName() {
+    let fileName = replaceFileNameTemplate(txnControlDataFileName)
+    return fileName
+  }
+
+  get currentBlock() {
+    return this.blocks[this.currentBlockIdx]
+  }
+
+  loadData() {
+    let obj = JSON.parse(fs.readFileSync(this.fileName));
+
+    for (var [key, value] of Object.entries(obj)) {
+      this[key] = value
+    }
+
+    this.blocks.forEach((item, i) => {
+      Object.setPrototypeOf(item, TransactionBlock.prototype)
+    })
+
+    this.loadBlock(this.currentBlock.id)
+  }
+
+  saveData () {
+    let replacer = (key, value) => {
+      // if (value instanceof Transaction) {return undefined}
+      if      (key == 'transactions') {return undefined}
+      else if (key == 'loadedBlocks') {return undefined}
+
+      return value
+    }
+
+    fs.writeFileSync(this.fileName, JSON.stringify(this, replacer, 2));
+  }
+
+  getBlockById(blockId) {
+    return this.blocks.find(item => item.id == blockId)
+  }
+
+  isBlockLoaded(blockId) {
+    return this.loadedBlocks.includes(blockId)
+  }
+
+  loadBlock(blockId) {
+    const blockIdx = this.blocks.findIndex(item => item.id == blockId)
+
+    const block = this.blocks[blockIdx]
+
+    block.loadData()
+
+    this.blocks[blockIdx] = block
+
+    this.loadedBlocks.push(blockId)
   }
 
   getNextBlockId() {
-    part1 = ("000" + this.blocks.length.toString(36)).slice(-3);
+    return ("000" + this.blocks.length.toString(36)).slice(-3);
   }
 
   createNewBlock() {
-    block = new TransactionBlock(this.getNextBlockId())
+    logAdd(`TransactionControl createNewBlock`)
 
-    this.blocks.push(block)
-    this.currentBlock = block
+    let block = new TransactionBlock(this.getNextBlockId())
+
+    const newLen = this.blocks.push(block)
+    this.currentBlockIdx = newLen - 1
+
+    this.saveData()
 
     this.currentBlock.saveData()
+
+    this.loadedBlocks.push(this.currentBlock.id)
+
+    logAdd(`TransactionControl createNewBlock, block created and saved ${block.id}`)
 
     return block
   }
 
   closeCurrentBlock() {
-    this.currentBlock.endedAt = Date.now() //Trocar para pegar o timestamp da última transação
+    var time = Date.now()
+    this.currentBlock.endedAt = time //Trocar para pegar o timestamp da última transação
     this.currentBlock.saveData()
-    this.currentBlock = null
+
+    // const block = this.blocks.find(item => item.id == this.currentBlock.id)
+
+    // block.endedAt = time
+
+    // this.currentBlock = null
   }
 
   checkCurrentBlock() {
-    if (currentBlock.transactionCount >= 5000) {
+    if (this.currentBlock.transactionCount >= this.transactionsPerBlock) {
       this.closeCurrentBlock()
       this.createNewBlock()
     }
   }
 
-  addBuyTransaction(symbol, side, price, value) {
-    t = new BuyTransaction(symbol, side, price, value)
+  registerBuy(symbol, price, value) {
+    this.checkCurrentBlock()
+
+    let t = new BuyTransaction(this.currentBlock.id, symbol, price, value)
     this.transactionCount++
 
-    this.currentBlock.addTrasaction(t)
+    this.currentBlock.addTransaction(t)
 
-    this.checkCurrentBlock()
+    this.saveData()
 
     return t
   }
 
-  addSellTransaction(symbol, side, price, value, buyId) {
-    t = new SellTransaction(symbol, side, price, value, buyId)
-    this.transactionCount++
+  registerSell(buyId, price) {
 
-    this.currentBlock.addTrasaction(t)
+    let buyTxn = this.getTransactionById(buyId)
 
     this.checkCurrentBlock()
+
+    let t = new SellTransaction(this.currentBlock.id, buyTxn.symbol, price, buyTxn.size, buyId)
+    this.transactionCount++
+
+    this.currentBlock.addTransaction(t)
+
+    this.saveData()
 
     return t
   }
 
-  getTransactionById() {
+  getBlockIdByTransactionId(id) {
+    return id.substring(0, 3)
+  }
 
+  getTransactionById(id) {
+
+    let blockId = this.getBlockIdByTransactionId(id)
+
+
+    if (!this.isBlockLoaded(blockId)) {
+      this.loadBlock(blockId)
+    }
+
+    let block = this.getBlockById(blockId)
+
+    let ret = block.transactions.find(item => item.id == id)
+
+    return ret
   }
 
   getTransactionByBuyId() {
@@ -610,6 +766,38 @@ class TransactionControl {
     
   }
 
+  getLast(qtt, side = 'any') {
+    let ret = []
+
+    for (var i = this.blocks.length - 1; i >= 0; i--) {
+
+      let block = this.blocks[i]
+
+      if (!this.isBlockLoaded(block.id)) {
+        this.loadBlock(block.id)
+      }
+
+      for (var j = block.transactions.length - 1; j >= 0; j--) {
+
+        let txn = block.transactions[j]
+
+        if (side == 'any') {
+          ret.push(txn)
+        } else if (txn.side == side) {
+          ret.push(txn)
+        } else {
+          continue
+        }
+
+        if (ret.length == qtt) {break;}
+      }
+      if (ret.length == qtt) {break;}
+    }
+
+    return ret
+  }
+
+
 }
 
 
@@ -623,10 +811,6 @@ function decreaseByPercent(value, percent) {
   value = parseFloat(value)
   return value - (value * percent)
 }
-
-const dataFileName                     = __dirname + '/data.json';
-const logFileNameTemplate              = __dirname + '/data/{robotId}/logs/log_{dt}_{hr}.txt';
-const transactionBlockFileNameTemplate = __dirname + '/data/{robotId}/transactions/trBlock_{blockId}.txt';
 
 var   logArr = []
 
@@ -661,13 +845,24 @@ API.init({
 
 const datafeed = new API.websocket.Datafeed();
 
+const dataFileName             = __dirname + '/data.json';
+const logFileNameTemplate      = __dirname + '/data/{robotId}/logs/log_{dt}_{hr}.txt';
+const txnControlDataFileName   = __dirname + '/data/{robotId}/transactions/txnControl.json';
+const txnBlockFileNameTemplate = __dirname + '/data/{robotId}/transactions/txnBlock_{blockId}.json';
 
 
 logAdd(`Reading data file ${dataFileName}`)
-
 var rbData = JSON.parse(fs.readFileSync(dataFileName));
-
 logAdd(`Data file read ${dataFileName}`)
+
+
+forceDirByFileNameTemplate(dataFileName)
+forceDirByFileNameTemplate(logFileNameTemplate)
+forceDirByFileNameTemplate(txnBlockFileNameTemplate)
+
+
+var txns = new TransactionControl()
+
 
 
 //******* Recuperando do Json e convertendo para o tipo de objeto correto
@@ -679,6 +874,10 @@ if (typeof rbData.bands != 'undefined') {
   })
 }
 
+// console.log(rbData.txns)
+
+
+
 
 
 if (typeof rbData.robotId == 'undefined' || rbData.robotId == '') {
@@ -686,9 +885,6 @@ if (typeof rbData.robotId == 'undefined' || rbData.robotId == '') {
 }
 
 
-forceDirByFileNameTemplate(dataFileName)
-forceDirByFileNameTemplate(logFileNameTemplate)
-forceDirByFileNameTemplate(transactionBlockFileNameTemplate)
 
 
 let prices = []
@@ -722,6 +918,20 @@ const callbackId = datafeed.subscribe(topic, (message) => {
 // console.log(`subscribe id: ${callbackId}`);
 
 
+
+
+
+
+
+
+
+
+
+//********************
+//********************
+//***** Lógica do Robô
+//********************
+//********************
 let robotMessage = '';
 const intervalRobo = setInterval(() => {
   rbData.robotLoop++
@@ -787,7 +997,8 @@ const intervalRobo = setInterval(() => {
     rbLogAdd(`Vai vender: ${asset.id}`)
     // console.log(asset)
 
-    transaction = sell(asset, prices['ADA-USDT'])
+    // transaction = sell(asset, prices['ADA-USDT'])
+    transaction = txns.registerSell(asset.id, prices['ADA-USDT'])
     rbData.bands.registerSellTransaction(transaction)
 
     robotMessage = `VENDEU no lucro >  (ADA ${transaction.size} * $${transaction.price}) - $${transaction.fee} (fee) = $${(transaction.value - transaction.fee)}`;
@@ -846,7 +1057,9 @@ const intervalRobo = setInterval(() => {
 
   let orderVl = Math.max(minimalOrder, maximalOrder)
 
-  transaction = buy(orderVl, prices['ADA-USDT'])
+  // transaction = buy(orderVl, prices['ADA-USDT'])
+  rbLogAdd('Vai registrar uma compra')
+  transaction = txns.registerBuy('ADA-USDT', prices['ADA-USDT'], orderVl)
   rbData.bands.registerBuyTransaction(transaction)
 
   robotMessage = `Buy  <  $${transaction.value.toFixed(4)} / $${transaction.price.toFixed(4)} = ADA ${transaction.size.toFixed(4)} (fee = $${transaction.fee.toFixed(4)}) | id: ${transaction.id})`
@@ -856,80 +1069,50 @@ const intervalRobo = setInterval(() => {
 
 }, 1000);
 
-function buy(qtdUSD, price) {
-  price = parseFloat(price)
 
-  let transaction = {
-    id : generateUID(),
-    side : 'buy',
-    symbol : 'ADA-USDT',
-    value : qtdUSD,
-    size : qtdUSD / price,
-    price : price,
-    fee : qtdUSD * rbData.configs.buyingFee,
-    timestamp : Date.now(),
-  }
+// function sell(buyTransaction, price) {
+//   price = parseFloat(price)
 
-  rbData.transactions.push(transaction)
+//   let transaction = {
+//     id : generateUID(),
+//     side : 'sell',
+//     symbol : 'ADA-USDT',
+//     value : buyTransaction.size * price,
+//     size : buyTransaction.size,
+//     price : price,
+//     fee : buyTransaction.size * price * rbData.configs.sellingFee,
+//     timestamp : Date.now(),
+//     buyId : buyTransaction.id,
+//   }
 
-  rbData.results.fees += transaction.fee;
+//   rbData.transactions.push(transaction)
 
-  rbData.assets.USDT.balance      -= (transaction.value + transaction.fee);
-  rbData.assets.USDT.values[0].qt  = rbData.assets.USDT.balance;
+//   rbData.assets.USDT.balance      += (transaction.value - transaction.fee);
+//   rbData.assets.USDT.values[0].qt  = rbData.assets.USDT.balance;
 
-  // calcAvgPrice()
+//   rbData.assets.ADA.balance -= transaction.size;
 
-  // distributeOrders()
-
-  saveData()
-
-  return transaction
-}
+//   const buyTransactions = [buyTransaction.id]
 
 
-function sell(buyTransaction, price) {
-  price = parseFloat(price)
+//   buyValue = sumTransactionsValues(buyTransactions)
+//   profit = transaction.value - buyValue
+//   if (profit > 0) {
+//     rbData.results.profits += profit
+//   } else {
+//     rbData.results.losses += Math.abs(profit)
+//   }
 
-  let transaction = {
-    id : generateUID(),
-    side : 'sell',
-    symbol : 'ADA-USDT',
-    value : buyTransaction.size * price,
-    size : buyTransaction.size,
-    price : price,
-    fee : buyTransaction.size * price * rbData.configs.sellingFee,
-    timestamp : Date.now(),
-    buyId : buyTransaction.id,
-  }
+//   rbData.results.fees += transaction.fee
 
-  rbData.transactions.push(transaction)
+//   // calcAvgPrice()
 
-  rbData.assets.USDT.balance      += (transaction.value - transaction.fee);
-  rbData.assets.USDT.values[0].qt  = rbData.assets.USDT.balance;
+//   // distributeOrders()
 
-  rbData.assets.ADA.balance -= transaction.size;
+//   saveData()
 
-  const buyTransactions = [buyTransaction.id]
-
-
-  buyValue = sumTransactionsValues(buyTransactions)
-  profit = transaction.value - buyValue
-  if (profit > 0) {
-    rbData.results.profits += profit
-  } else {
-    rbData.results.losses += Math.abs(profit)
-  }
-
-  rbData.results.fees += transaction.fee
-
-  // calcAvgPrice()
-
-  // distributeOrders()
-
-  saveData()
-
-  return transaction
-}
+//   return transaction
+// }
 
 
 // function calcAvgPrice() {
@@ -948,30 +1131,29 @@ function sell(buyTransaction, price) {
 //   rbData.assets.ADA.sellingPoint = increaseByPercent(rbData.assets.ADA.avgPrice, (rbData.configs.targetProfit + rbData.configs.buyingFee + rbData.configs.sellingFee));
 // }
 
-function sumTransactionsValues(transactions) {
-  arr = getTransactions(transactions)
-  sum = arr.map(item => item.value).reduce((prev, next) => prev + next);
+// function sumTransactionsValues(transactions) {
+//   arr = getTransactions(transactions)
+//   sum = arr.map(item => item.value).reduce((prev, next) => prev + next);
 
-  return sum
-}
+//   return sum
+// }
 
-function getTransactions(transactions) {
-  if (!Array.isArray(transactions)) {
-    transactions = [transactions]
-  }
+// function getTransactions(transactions) {
+//   if (!Array.isArray(transactions)) {
+//     transactions = [transactions]
+//   }
 
-  let ret = []
+//   let ret = []
 
-  transactions.forEach((transId, i) => {
-    let transIdx = rbData.transactions.findIndex(item => item.id == transId)
+//   transactions.forEach((transId, i) => {
+//     let transIdx = rbData.transactions.findIndex(item => item.id == transId)
 
-    ret.push(rbData.transactions[transIdx])
-  })
+//     ret.push(rbData.transactions[transIdx])
+//   })
 
 
-  return ret
-}
-
+//   return ret
+// }
 
 
 function saveData() {
@@ -1037,30 +1219,22 @@ function printAssets(arr) {
 function printLastTransactions(qt, side) {
   let arrRet = Array(qt)
 
-  arr = rbData.transactions.slice(-300);
-  arr.reverse()
-
-  pos = 0
+  arr = txns.getLast(qt, side);
 
   arr.forEach((item, i) => {
-    if (item.side != side) {
-      return false
-    }
-
-    if (pos >= qt) {
-      return false
-    }
-
     secsSince = Math.trunc((Date.now() - item.timestamp) / 1000)
-    arrRet[pos] =  `   ${(secsSince).padLeft(6, ' ')}s   ${item.side.padRight(4, ' ')}   |   ADA${item.size.toFixed(6).padLeft(10, ' ')} * $${item.price.toFixed(6).padLeft(10, ' ')} = $${item.value.toFixed(2).padLeft(7, ' ')}`
-
-    pos++
+    arrRet[i] =  `   ${(secsSince).padLeft(6, ' ')}s   ${item.side.padRight(4, ' ')}   |   ADA${item.size.toFixed(6).padLeft(10, ' ')} * $${item.price.toFixed(6).padLeft(10, ' ')} = $${item.value.toFixed(2).padLeft(7, ' ')}`
   })
 
   return arrRet.join('\n')
 }
 
 const intervalLogUpdate = setInterval(async () => {
+
+  if (typeof prices['ADA-USDT'] == 'undefined') {
+    logUpdate(`Inicializando, preço ainda não recebido\n`)
+    return;
+  }
 
 
   // logUpdate.clear();
@@ -1132,7 +1306,7 @@ const intervalLogUpdate = setInterval(async () => {
     // `ADA AvgPrice   $${rbData.assets.ADA.avgPrice.toFixed(6)} |  Sell at: $${rbData.assets.ADA.sellingPoint.toFixed(6)}  |  Buy at: $${buyAt}  |  Dump at: $${rbData.assets.ADA.dumpPoint.toFixed(6)}\n`+
     `ADA AvgPrice  ??? | BuyAt: ${buyAt} | SellAt: ${sellAt} | Dump At: ${dumpAt}\n`+
     `\n`+
-    `Assets (${stats.assetCount.padLeft(3, ' ')})   ${strAssets}\n`+
+    `Assets (${stats.assetCount.padLeft(4, ' ')})   ${strAssets}\n`+
     `\n`+
     `Msg ${rbData.robotLoop.padLeft(9, ' ')}   ${robotMessage}\n`+
     `\n`+
@@ -1140,7 +1314,7 @@ const intervalLogUpdate = setInterval(async () => {
     `Current band: ${curBand.toString()}\n`+
     `              ${prvBand.toString()}\n`+
     `\n`+
-    `Transactions (${rbData.transactions.length})\n`+
+    `Transactions (${txns.transactionCount})\n`+
     `---------- Last 5 Buy\n` +
     `${printLastTransactions(5, 'buy')}\n` +
     `----------Last 5 Sell\n` +
