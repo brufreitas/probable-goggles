@@ -46,7 +46,26 @@ Date.prototype.to_hr_string = function() {
 
 
 class BandControl {
+  bandQtt = 10
+  basePrice = Number.POSITIVE_INFINITY
+  initBalance = new Number(0.0)
+  targetProfit = new Number(0.5)
+  lastActiveBand = Number.POSITIVE_INFINITY
+  loadedBands = []
+  bands = []
+
   constructor(bandQtt, initBalance, basePrice, targetProfit) {
+    logAdd(`BandControl constructor`)
+
+    if (fs.existsSync(this.fileName)) {
+      logAdd(`BandControl constructor going to loadData from [${this.fileName}]`)
+      this.loadData()
+      logAdd(`BandControl constructor data loaded from [${this.fileName}]`)
+      return
+    }
+
+    logAdd(`BandControl constructor will create the BandControl object`)
+
     this.bands = []
     this.bandQtt = bandQtt
     this.initBalance = initBalance
@@ -67,6 +86,65 @@ class BandControl {
     }
 
     this.distributeEqually(initBalance)
+
+    this.saveData()
+  }
+
+  get fileName() {
+    return replaceFileNameTemplate(bandControlFileName)
+  }
+
+  loadData() {
+    let obj = JSON.parse(fs.readFileSync(this.fileName));
+
+    for (var [key, value] of Object.entries(obj)) {
+      this[key] = value
+    }
+
+    this.bands.forEach((item, i) => {
+      Object.setPrototypeOf(item, OperationBand.prototype)
+    })
+
+    this.loadBand(this.lastActiveBand)
+  }
+
+  loadBand(bandNumber) {
+    logAdd(`BandControl loadBand: bandNumber ${bandNumber}`)
+
+    if (this.loadedBands.includes(bandNumber)) {
+      logAdd(`BandControl loadBand: bandNumber ${bandNumber} alreaddy loaded`)
+      return true
+    }
+
+    const bandIdx = this.findBandIdxByBandNumber(bandNumber)
+
+    if (bandIdx == -1) {
+      logAdd(`BandControl loadBand: bandNumber ${bandNumber} not found`)
+      return false
+    }
+
+    let band = this.bands[bandIdx]
+
+    logAdd(`BandControl loadBand: loading band ${bandNumber}`)
+    band.loadData()
+    logAdd(`BandControl loadBand band ${bandNumber} loaded`)
+
+    this.bands[bandIdx] = band
+
+    this.loadedBands.push(bandNumber)
+  }
+
+  saveData () {
+    let replacer = (key, value) => {
+      // if (value instanceof Transaction) {return undefined}
+      if (key == '_assets'    ) {return undefined}
+      if (key == 'loaded'     ) {return undefined}
+      if (key == 'loadedBands') {return undefined}
+
+      return value
+    }
+
+    fs.writeFileSync(this.fileName, JSON.stringify(this, replacer, 2));
   }
 
   getTopBand() {
@@ -89,7 +167,6 @@ class BandControl {
   }
 
   getNextBand(band) {
-
     let found = null
     while (true) {
       found = this.findBandByBandNumber(band.bandNumber + 1)
@@ -106,6 +183,10 @@ class BandControl {
 
     this.bands.unshift(newBand)
 
+    logAdd(`BandControl addHigherBand: saving data`)
+    this.saveData()
+    logAdd(`BandControl addHigherBand: data saved`)
+
     return newBand
   }
 
@@ -114,6 +195,10 @@ class BandControl {
     let newBand = new OperationBand(bottomBand.bandNumber - 1, this.basePrice, this.targetProfit)
 
     this.bands.push(newBand)
+
+    logAdd(`BandControl addLowerBand: saving data`)
+    this.saveData()
+    logAdd(`BandControl addLowerBand: data saved`)
 
     return newBand
   }
@@ -173,6 +258,10 @@ class BandControl {
     return this.bands.find(item => item.bandNumber == bandNumber)
   }
 
+  findBandIdxByBandNumber(bandNumber) {
+    return this.bands.findIndex(item => item.bandNumber == bandNumber)
+  }
+
   registerBuyTransaction(transaction) {
     logAdd(`BandControl: entering registerBuyTransaction | Transaction Info > id: ${transaction.id} | price: ${transaction.price} | value: ${transaction.value} | size: ${transaction.size} | fee: ${transaction.fee}`)
 
@@ -183,6 +272,11 @@ class BandControl {
     band.registerBuyTransaction(transaction)
 
     logAdd(`BandControl: after  band.registerBuyTransaction | bandInfo > ${band.toString()}`)
+
+    logAdd(`BandControl registerBuyTransaction: saving data`)
+    this.saveData()
+    logAdd(`BandControl registerBuyTransaction: data saved`)
+
   }
 
   registerSellTransaction(transaction) {
@@ -195,12 +289,20 @@ class BandControl {
     band.registerSellTransaction(transaction)
 
     logAdd(`BandControl: after  band.registerSellTransaction | bandInfo > ${band.toString()}`)
+
+    logAdd(`BandControl registerSellTransaction: saving data`)
+    this.saveData()
+    logAdd(`BandControl registerSellTransaction: data saved`)
   }
 
   sellingAt() {
     //Lopping reverso
     for (let i = this.bands.length - 1; i >= 0; i--) {
       let band = this.bands[i]
+
+      if (!this.loadedBands.includes(band.bandNumber)) {
+        this.loadBand(band.bandNumber)
+      }
 
       if (band.assets.length > 0) {
         return band.sellingAt()
@@ -303,21 +405,23 @@ class BandControl {
 }
 
 class OperationBand {
+  bandNumber = 0
+  results = {
+    profits: 0.0,
+    losses: 0.0,
+    fees: 0.0
+  }
+  initBalance = null
+  availableBalance = 0
+  counterBalance = 0
+  ceilingPrice = 0
+  floorPrice = 0
+  loaded = false
+  _assets = []
+
   constructor(bandNumber, basePrice, targetProfit) {
     basePrice = parseFloat(basePrice)
     this.bandNumber = bandNumber;
-    this.basePrice = basePrice;
-    this.results = {
-      profits: 0.0,
-      losses: 0.0,
-      fees: 0.0
-    }
-    this.initBalance = null;
-    this.availableBalance = 0;
-    this.counterBalance = 0;
-    this.ceilingPrice = 0;
-    this.floorPrice = 0;
-    this.assets = []
 
     let band0FloorPrice   = decreaseByPercent(basePrice, targetProfit)
     let band0CeilingPrice = increaseByPercent(basePrice, targetProfit)
@@ -344,7 +448,68 @@ class OperationBand {
       }
     }
 
-    logAdd(`OperationBand created, ${this.bandNumber}, base ${this.basePrice}, from ${this.floorPrice} to ${this.ceilingPrice}`)
+    this.saveData()
+
+    logAdd(`OperationBand created, ${this.bandNumber}, base ${basePrice}, from ${this.floorPrice} to ${this.ceilingPrice}`)
+  }
+
+  get assets () {
+    if (!this.loaded) {
+      this.loadData()
+    }
+
+    return this._assets
+  }
+
+  saveData () {
+    let replacer = (key, value) => {
+      if      (key == 'loaded'          ) {return undefined}
+      else if (key == 'initBalance'     ) {return undefined}
+      else if (key == 'availableBalance') {return undefined}
+      else if (key == 'counterBalance'  ) {return undefined}
+
+      return value
+    }
+
+    fs.writeFileSync(this.fileName, JSON.stringify(this, replacer, 2));
+  }
+
+  loadData () {
+    logAdd(`OperationBand loadData this.id: (${this.bandNumber}), fileName: (${this.fileName})`)
+
+    let obj = JSON.parse(fs.readFileSync(this.fileName));
+
+    for (var [key, value] of Object.entries(obj)) {
+      this[key] = value
+    }
+
+    Object.setPrototypeOf(this, OperationBand.prototype)
+
+    this._assets.forEach((item, i) => {
+      Object.setPrototypeOf(item, BuyTransaction.prototype)
+    })
+
+    this.loaded = true
+
+    logAdd(`OperationBand loadData data loaded this.id: (${this.bandNumber})`)
+  }
+
+  get fileName() {
+    let fileName = replaceFileNameTemplate(bandFileNameTemplate)
+    fileName = fileName.replace('{bandStrId}' , this.bandStrId)
+    // fileName = fileName.replace('{bandNumber}', this.bandNumber)
+
+    return fileName
+  }
+
+  get bandStrId() {
+    if (this.bandNumber > 0) {
+      return 'p' + Math.abs(this.bandNumber).padLeft(4)
+    } else if (this.bandNumber < 0) {
+      return 'n' + Math.abs(this.bandNumber).padLeft(4)
+    } else {
+      return '0000'
+    }
   }
 
   isPriceBetween(price) {
@@ -435,6 +600,10 @@ class OperationBand {
 
     this.availableBalance -= (transaction.value + transaction.fee)
     this.counterBalance   += transaction.size
+
+    logAdd(`OperationBand registerBuyTransaction: saving data`)
+    this.saveData()
+    logAdd(`OperationBand registerBuyTransaction: data saved`)
   }
 
   registerSellTransaction(transaction) {
@@ -455,9 +624,15 @@ class OperationBand {
     }
 
     this.results.fees += transaction.fee
+
+    logAdd(`OperationBand registerSellTransaction: saving data`)
+    this.saveData()
+    logAdd(`OperationBand registerSellTransaction: data saved`)
   }
 
   toString() {
+    if (!this.loaded) {this.loadData()}
+
     let sellAt = this.sellingAt()
     if (sellAt == Number.POSITIVE_INFINITY) {
       sellAt = '--'
@@ -609,8 +784,7 @@ class TransactionControl {
   }
 
   get fileName() {
-    let fileName = replaceFileNameTemplate(txnControlDataFileName)
-    return fileName
+    return replaceFileNameTemplate(txnControlFileName)
   }
 
   get currentBlock() {
@@ -847,8 +1021,12 @@ const datafeed = new API.websocket.Datafeed();
 
 const dataFileName             = __dirname + '/data.json';
 const logFileNameTemplate      = __dirname + '/data/{robotId}/logs/log_{dt}_{hr}.txt';
-const txnControlDataFileName   = __dirname + '/data/{robotId}/transactions/txnControl.json';
+
+const txnControlFileName       = __dirname + '/data/{robotId}/transactions/txnControl.json';
 const txnBlockFileNameTemplate = __dirname + '/data/{robotId}/transactions/txnBlock_{blockId}.json';
+
+const bandControlFileName      = __dirname + '/data/{robotId}/bands/bandControl.json';
+const bandFileNameTemplate     = __dirname + '/data/{robotId}/bands/band_{bandStrId}.json';
 
 
 logAdd(`Reading data file ${dataFileName}`)
@@ -858,21 +1036,23 @@ logAdd(`Data file read ${dataFileName}`)
 
 forceDirByFileNameTemplate(dataFileName)
 forceDirByFileNameTemplate(logFileNameTemplate)
-forceDirByFileNameTemplate(txnBlockFileNameTemplate)
+forceDirByFileNameTemplate(txnControlFileName)
+forceDirByFileNameTemplate(bandControlFileName)
 
 
 var txns = new TransactionControl()
 
+var bandCtrl
 
 
-//******* Recuperando do Json e convertendo para o tipo de objeto correto
-if (typeof rbData.bands != 'undefined') {
-  Object.setPrototypeOf(rbData.bands, BandControl.prototype)
+// //******* Recuperando do Json e convertendo para o tipo de objeto correto
+// if (typeof rbData.bands != 'undefined') {
+//   Object.setPrototypeOf(rbData.bands, BandControl.prototype)
 
-  rbData.bands.bands.forEach((item, i) => {
-    Object.setPrototypeOf(item, OperationBand.prototype)
-  })
-}
+//   rbData.bands.bands.forEach((item, i) => {
+//     Object.setPrototypeOf(item, OperationBand.prototype)
+//   })
+// }
 
 // console.log(rbData.txns)
 
@@ -946,15 +1126,15 @@ const intervalRobo = setInterval(() => {
 
   //Criação das bandas para a primeira execução. 
   //A criação deve ser neste ponto pois aqui é necessário ter o preço base do ativo, e neste ponto é garantido que existe este preço
-  if (typeof rbData.bands == 'undefined') {
-    rbData.bands = new BandControl(rbData.configs.bandQuantity, rbData.assets.USDT.balance, prices['ADA-USDT'], rbData.configs.targetProfit)
+  if (typeof bandCtrl == 'undefined') {
+    bandCtrl = new BandControl(rbData.configs.bandQuantity, rbData.assets.USDT.balance, prices['ADA-USDT'], rbData.configs.targetProfit)
   }
 
-  let curBand = rbData.bands.findBandByPrice(prices['ADA-USDT'])
+  let curBand = bandCtrl.findBandByPrice(prices['ADA-USDT'])
 
-  rbLogAdd(`Current band: ${curBand.toString()} / Buy At: ${curBand.buyingAt()} / Sell At: ${rbData.bands.sellingAt()} / Dump At: ${rbData.bands.dumpingAt()}`)
+  rbLogAdd(`Current band: ${curBand.toString()} / Buy At: ${curBand.buyingAt()} / Sell At: ${bandCtrl.sellingAt()} / Dump At: ${bandCtrl.dumpingAt()}`)
 
-  rbData.bands.activateBand(curBand)
+  bandCtrl.activateBand(curBand)
 
 
 
@@ -985,21 +1165,21 @@ const intervalRobo = setInterval(() => {
 
   // Vendas normais
   while (true) {
-    sellAt = rbData.bands.sellingAt()
+    sellAt = bandCtrl.sellingAt()
 
     if (prices['ADA-USDT'] < sellAt) {
       rbLogAdd(`Não vai vender, está muito barato (sellingAt: ${sellAt})`)
       break;
     }
 
-    asset = rbData.bands.getCheapestAsset()
+    asset = bandCtrl.getCheapestAsset()
 
     rbLogAdd(`Vai vender: ${asset.id}`)
     // console.log(asset)
 
     // transaction = sell(asset, prices['ADA-USDT'])
     transaction = txns.registerSell(asset.id, prices['ADA-USDT'])
-    rbData.bands.registerSellTransaction(transaction)
+    bandCtrl.registerSellTransaction(transaction)
 
     robotMessage = `VENDEU no lucro >  (ADA ${transaction.size} * $${transaction.price}) - $${transaction.fee} (fee) = $${(transaction.value - transaction.fee)}`;
     rbLogAdd(robotMessage)
@@ -1060,7 +1240,7 @@ const intervalRobo = setInterval(() => {
   // transaction = buy(orderVl, prices['ADA-USDT'])
   rbLogAdd('Vai registrar uma compra')
   transaction = txns.registerBuy('ADA-USDT', prices['ADA-USDT'], orderVl)
-  rbData.bands.registerBuyTransaction(transaction)
+  bandCtrl.registerBuyTransaction(transaction)
 
   robotMessage = `Buy  <  $${transaction.value.toFixed(4)} / $${transaction.price.toFixed(4)} = ADA ${transaction.size.toFixed(4)} (fee = $${transaction.fee.toFixed(4)}) | id: ${transaction.id})`
   rbLogAdd(robotMessage)
@@ -1254,11 +1434,11 @@ const intervalLogUpdate = setInterval(async () => {
   // let totalToUS = adaToUS + rbData.assets.USDT.balance
   // let result = rbData.results.profits - rbData.results.losses - rbData.results.fees
 
-  let stats = rbData.bands.getStats()
+  let stats = bandCtrl.getStats()
   // console.log(stats)
   // process.exit(0)
 
-  if (typeof rbData.bands == 'undefined' || typeof prices['ADA-USDT'] == 'undefined') {
+  if (typeof bandCtrl == 'undefined' || typeof prices['ADA-USDT'] == 'undefined') {
     price   = '---'
     curBand = '---'
     prvBand = '---'
@@ -1272,13 +1452,13 @@ const intervalLogUpdate = setInterval(async () => {
     totalCurrent         = '---'
   } else {
     price   = prices['ADA-USDT'].toFixed(4)
-    curBand = rbData.bands.findBandByPrice(prices['ADA-USDT'])
-    prvBand = rbData.bands.getPreviousBand(curBand)
-    nxtBand = rbData.bands.getNextBand(curBand)
+    curBand = bandCtrl.findBandByPrice(prices['ADA-USDT'])
+    prvBand = bandCtrl.getPreviousBand(curBand)
+    nxtBand = bandCtrl.getNextBand(curBand)
 
     buyAt   = curBand.buyingAt().toFixed(4)
-    sellAt  = rbData.bands.sellingAt().toFixed(4)
-    dumpAt  = rbData.bands.dumpingAt().toFixed(4)
+    sellAt  = bandCtrl.sellingAt().toFixed(4)
+    dumpAt  = bandCtrl.dumpingAt().toFixed(4)
 
     counterToBaseCurrent = stats.counterBalance * prices['ADA-USDT']
     totalCurrent         = (counterToBaseCurrent + stats.availableBalance).toFixed(2)
