@@ -1,16 +1,16 @@
 {
-  "robotId": "w64rignwv",
-  "robotLoop": 189257,
+  "robotId": null,
+  "robotLoop": 0,
   "lastDump": 0,
-  "lastBuy": 1655985035659,
+  "lastBuy": 0,
   "configs": {
     "minimalBuyingOrderAbs": 0.5,
     "maximalBuyingOrderRel": 0.001,
     "dumpCooldown": 600,
-    "buyCooldown": 30,
+    "buyCooldown": 15,
     "buyingFee": 0.001,
     "sellingFee": 0.001,
-    "targetProfit": 0.002,
+    "targetProfit": 0.001,
     "dumpLimit": 0.99,
     "bandQuantity": 4
   },

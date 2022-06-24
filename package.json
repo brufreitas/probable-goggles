@@ -2,6 +2,7 @@
   "dependencies": {
     "kucoin-node-sdk": "^1.0.4",
     "lodash": "^4.17.21",
+    "ulid": "^2.3.0",
     "winston": "^3.7.2"
   },
   "name": "robotrader",
