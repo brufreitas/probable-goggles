@@ -1,8 +1,8 @@
 {
   "robotId": null,
-  "robotLoop": 0,
+  "robotLoop": 32,
   "lastDump": 0,
-  "lastBuy": 0,
+  "lastBuy": 1656040452317,
   "configs": {
     "minimalBuyingOrderAbs": 0.5,
     "maximalBuyingOrderRel": 0.001,

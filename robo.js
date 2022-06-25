@@ -5,6 +5,7 @@ const API = require('kucoin-node-sdk');
 const readline = require('readline');
 const fs = require('fs');
 const logger = require('./loggerV2.js');
+const ULID = require('ulid')
 
 
 Number.prototype.padLeft = function (len, chr){
@@ -657,7 +658,7 @@ class Transaction {
   constructor(blockId, symbol, side, price, value) {
     price = parseFloat(price)
 
-    this.id        = blockId + '-' + generateUID()
+    this.id        = blockId + '-' + ULID.ulid()
     this.side      = side
     this.symbol    = symbol
     this.value     = value           //buy: balance spent           / sell: balance received
@@ -758,7 +759,7 @@ class TransactionControl {
 
   currentBlockIdx
 
-  transactionsPerBlock = 10
+  transactionsPerBlock = 1000
 
   blocks = []
   loadedBlocks = []
@@ -1033,6 +1034,10 @@ logAdd(`Reading data file ${dataFileName}`)
 var rbData = JSON.parse(fs.readFileSync(dataFileName));
 logAdd(`Data file read ${dataFileName}`)
 
+if (typeof rbData.robotId == 'undefined' || rbData.robotId == '' || rbData.robotId == null) {
+  rbData.robotId = generateUID()
+}
+
 
 forceDirByFileNameTemplate(dataFileName)
 forceDirByFileNameTemplate(logFileNameTemplate)
@@ -1060,9 +1065,6 @@ var bandCtrl
 
 
 
-if (typeof rbData.robotId == 'undefined' || rbData.robotId == '') {
-  rbData.robotId = generateUID()
-}
 
 
 
