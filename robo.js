@@ -505,7 +505,7 @@ class OperationBand {
 
   get bandStrId() {
     if (this.bandNumber > 0) {
-      return 'p' + Math.abs(this.bandNumber).padLeft(4)
+      return 'p' + this.bandNumber.padLeft(4)
     } else if (this.bandNumber < 0) {
       return 'n' + Math.abs(this.bandNumber).padLeft(4)
     } else {
@@ -608,7 +608,7 @@ class OperationBand {
   }
 
   registerSellTransaction(transaction) {
-    this.availableBalance += (transaction.value - transaction.fee);
+    this.availableBalance += transaction.value - transaction.fee;
     this.counterBalance   -= transaction.size
 
     const i = this.assets.findIndex(item => item.id == transaction.buyId)
@@ -617,12 +617,14 @@ class OperationBand {
     this.assets.splice(i, 1); // 2nd parameter means remove one item only
     this.assets.sort((a, b) => a.price - b.price);
 
-    let profit = transaction.value - transaction.fee - buyTransaction.value
+    let profit = transaction.value - buyTransaction.value - transaction.fee - buyTransaction.fee
     if (profit > 0) {
       this.results.profits += profit
     } else {
       this.results.losses  += Math.abs(profit)
     }
+
+    logAdd(`OperationBand registerSellTransaction: Profit -> (sellValue: ${transaction.value} - buyValue: ${buyTransaction.value}) = ${transaction.value - buyTransaction.value} - fees (b: ${buyTransaction.value} + s: ${transaction.fee} = ${transaction.fee + buyTransaction.fee}) = ${profit}`)
 
     this.results.fees += transaction.fee
 
@@ -1469,15 +1471,6 @@ const intervalLogUpdate = setInterval(async () => {
 
 
   let percAvail =  ((stats.availableBalance / stats.totalBalance) * 100).toFixed(1)
-
-  // availableBalance: 0,
-  // counterBalance: 0,
-  // totalBalance: 0,
-  // usedBalance:0,
-  // assetCount: 0,
-  // profits: 0,
-  // losses: 0,
-  // fees: 0,
 
 
 
